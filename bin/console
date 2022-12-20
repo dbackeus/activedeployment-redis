@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+
+require "bundler/setup"
+
+require_relative "../lib/client"
+require_relative "../lib/redis"
+
+include ActiveDeployment
+
+require "irb"
+IRB.start
