@@ -3,6 +3,6 @@ kind: Redis
 metadata:
   name: mynewsdesk-test
 spec:
-  replicas: 1
+  replicas: 2
   cpu: 100m
   memory: 100Mi

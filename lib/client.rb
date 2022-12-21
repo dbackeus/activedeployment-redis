@@ -38,8 +38,8 @@ module ActiveDeployment
 
       if (client_key_data = user["client-key-data"])
         client_key = OpenSSL::PKey::EC.new(Base64.decode64(client_key_data))
-      elsif (exec = user["exec"])
-        # command = [exec["command"]].concat(exec["args"].to_a).compact.join(" ")
+      elsif user["exec"]
+        # command = [user["exec"]["command"]].concat(user["exec"]["args"].to_a).compact.join(" ")
         # token = JSON.parse(`#{command}`).fetch("status").fetch("token")
         raise "TODO: implement OIDC authentication support"
       else
@@ -55,7 +55,7 @@ module ActiveDeployment
         },
         headers: {
           "Content-Type" => "application/json",
-          "Accept" => "application/json"
+          "Accept" => "application/json",
         }
       )
     end
@@ -84,15 +84,21 @@ module ActiveDeployment
     end
 
     def post(path, params)
-      JSON.parse @client.post(path, params.to_json).body
+      response = JSON.parse @client.post(path, params.to_json).body
+      pp response if response["kind"] == "Status"
+      response
     end
 
     def put(path, params)
-      JSON.parse @client.put(path, params.to_json).body
+      response = JSON.parse @client.put(path, params.to_json).body
+      pp response if response["kind"] == "Status"
+      response
     end
 
     def delete(path)
-      JSON.parse @client.delete(path).body
+      response = JSON.parse @client.delete(path).body
+      pp response if response["kind"] == "Status"
+      response
     end
   end
 end

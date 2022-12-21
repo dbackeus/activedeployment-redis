@@ -1,0 +1,1 @@
+- Ensure sentinel initContainer doesn't proceed until all `dig` commands resolve
