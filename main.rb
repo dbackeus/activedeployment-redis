@@ -1,9 +1,5 @@
 require "debug"
-require "yaml"
-require "json"
-
 require "bundler/setup"
-require "yajl" # gem is yajl-ruby
 
 require_relative "lib/client"
 require_relative "lib/redis"
@@ -21,8 +17,7 @@ initial_response.fetch("items").each do |object|
 end
 resource_version = initial_response.fetch("metadata").fetch("resourceVersion")
 
-parser = Yajl::Parser.new
-parser.on_parse_complete = lambda do |response|
+client.watch("apis/ruby.love/v1/redis", resource_version: -> { resource_version }) do |response|
   object = response.fetch("object")
   type = response.fetch("type")
 
@@ -43,8 +38,4 @@ parser.on_parse_complete = lambda do |response|
     puts "Unhandled response type 😱"
     pp response
   end
-end
-
-client.watch("apis/ruby.love/v1/redis", resource_version: -> { resource_version }) do |chunk|
-  parser << chunk
 end

@@ -1,5 +1,6 @@
 require "faraday"
 require "json"
+require "yajl" # gem is yajl-ruby
 require "yaml"
 
 module ActiveDeployment
@@ -56,7 +57,7 @@ module ActiveDeployment
         headers: {
           "Content-Type" => "application/json",
           "Accept" => "application/json",
-        }
+        },
       )
     end
 
@@ -64,23 +65,24 @@ module ActiveDeployment
       JSON.parse @client.get(path).body
     end
 
-    def watch(path, resource_version:)
+    def watch(path, resource_version:, &block)
       params = {
         watch: true,
         allowWatchBookmarks: true,
         resourceVersion: resource_version.call,
       }
 
+      parser = Yajl::Parser.new
+      parser.on_parse_complete = block
+
       puts "watching #{path} from version: #{params[:resourceVersion]}"
 
       @client.get(path, params) do |request|
+        request.options.timeout = 31_536_000 # 1 year in seconds
         request.options.on_data = lambda do |chunk, _total_bytes_received, _env|
-          yield chunk
+          parser << chunk
         end
       end
-    rescue Faraday::TimeoutError
-      puts "watching #{path} timed out..."
-      retry
     end
 
     def post(path, params)

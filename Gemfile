@@ -1,4 +1,4 @@
 source "https://rubygems.org"
 
-gem "yajl-ruby"
 gem "faraday"
+gem "yajl-ruby"
