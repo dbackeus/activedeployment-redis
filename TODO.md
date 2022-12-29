@@ -1,1 +1,3 @@
-- Ensure sentinel initContainer doesn't proceed until all `dig` commands resolve
+- Service pointing to current master
+- React to sentinel events (https://redis.io/docs/management/sentinel/#pubsub-messages)
+- Maybe higher prio for replica-0 (https://redis.io/docs/management/sentinel/#replica-selection-and-priority)
