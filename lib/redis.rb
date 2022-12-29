@@ -14,33 +14,35 @@ module ActiveDeployment
     end
 
     def upsert
-      puts "upserting statefulset"
-      existing_redis_server = client.get("/apis/apps/v1/namespaces/default/statefulsets/#{name}-redis")
+      puts "upserting redis server statefulset"
+      redis_server_path = "/apis/apps/v1/namespaces/default/statefulsets/#{name}-redis"
+      existing_redis_server = client.get(redis_server_path)
       if existing_redis_server["code"] == 404
         client.post("/apis/apps/v1/namespaces/default/statefulsets?fieldValidation=Strict", redis_server_payload)
       else
-        client.put("/apis/apps/v1/namespaces/default/statefulsets/#{name}-redis?fieldValidation=Strict", redis_server_payload)
+        client.put("#{redis_server_path}?fieldValidation=Strict", redis_server_payload)
       end
 
-      replicas.times do |replica|
-        puts "upserting service #{replica}"
-        existing_service = client.get("/api/v1/namespaces/default/services/#{name}-redis-#{replica}")
-        if existing_service["code"] == 404
-          client.post("/api/v1/namespaces/default/services?fieldValidation=Strict", redis_service_payload(replica))
-        else
-          client.put(
-            "/api/v1/namespaces/default/services/#{name}-redis-#{replica}?fieldValidation=Strict",
-            redis_service_payload(replica),
-          )
-        end
-      end
-
-      puts "upserting sentinels"
-      existing_sentinel = client.get("/apis/apps/v1/namespaces/default/deployments/#{name}-redis-sentinel")
-      if existing_sentinel["code"] == 404
-        client.post("/apis/apps/v1/namespaces/default/deployments?fieldValidation=Strict", sentinel_payload)
+      puts "upserting redis server service"
+      existing_service = client.get("/api/v1/namespaces/default/services/#{name}-redis")
+      if existing_service["code"] == 404
+        client.post("/api/v1/namespaces/default/services?fieldValidation=Strict", redis_service_payload)
       else
-        client.put("/apis/apps/v1/namespaces/default/deployments/#{name}-redis-sentinel?fieldValidation=Strict", sentinel_payload)
+        client.put(
+          "/api/v1/namespaces/default/services/#{name}-redis?fieldValidation=Strict",
+          redis_service_payload,
+        )
+      end
+
+      puts "upserting redis server master service"
+      existing_master_service = client.get("/api/v1/namespaces/default/services/#{name}-redis-master")
+      if existing_master_service["code"] == 404
+        client.post("/api/v1/namespaces/default/services?fieldValidation=Strict", redis_master_service_payload)
+      else
+        client.put(
+          "/api/v1/namespaces/default/services/#{name}-redis-master?fieldValidation=Strict",
+          redis_master_service_payload,
+        )
       end
     end
 
@@ -65,17 +67,11 @@ module ActiveDeployment
             "app.kubernetes.io/name" => "redis",
             "app.kubernetes.io/part-of" => name,
           },
-          ownerReferences: [{
-            apiVersion: "ruby.love/v1",
-            blockOwnerDeletion: true,
-            controller: true,
-            kind: "Redis",
-            name: name,
-            uid: uid,
-          }],
+          ownerReferences: owner_references,
         },
         spec: {
           replicas: replicas,
+          serviceName: "#{name}-redis",
           selector: {
             matchLabels: {
               "app.kubernetes.io/component" => "redis",
@@ -100,16 +96,19 @@ module ActiveDeployment
                 image: "redis:7.0.7-alpine",
                 command: %w[sh -c],
                 args: [
-                  <<~SH
-                    echo "TODO..."
+                  <<~SH,
+                    echo "
+                    replica-announce-ip $(hostname).#{name}-redis.default.svc.cluster.local
+                    " > /etc/redis/redis.conf
                   SH
                 ],
-                #volumeMounts: [{ name: "conf", mountPath: "/etc/redis" }],
+                volumeMounts: [{ name: "conf", mountPath: "/etc/redis" }],
               }],
               containers: [
                 {
                   name: "redis",
                   image: "redis:7.0.7-alpine",
+                  command: %w[redis-server /etc/redis/redis.conf],
                   ports: [{ containerPort: 6379, name: "redis", protocol: "TCP" }],
                   livenessProbe: {
                     exec: {
@@ -127,8 +126,8 @@ module ActiveDeployment
                     },
                   },
                   volumeMounts: [
-                    # { name: "conf", mountPath: "/etc/redis" },
                     { name: "data", mountPath: "/data" }, # redis docker image uses /data by convention
+                    { name: "conf", mountPath: "/etc/redis" },
                   ],
                 },
               ],
@@ -139,14 +138,7 @@ module ActiveDeployment
             kind: "PersistentVolumeClaim",
             metadata: {
               name: "data",
-              ownerReferences: [{
-                apiVersion: "ruby.love/v1",
-                blockOwnerDeletion: true,
-                controller: true,
-                kind: "Redis",
-                name: name,
-                uid: uid,
-              }],
+              ownerReferences: owner_references,
             },
             spec: {
               accessModes: %w[ReadWriteOnce],
@@ -162,12 +154,13 @@ module ActiveDeployment
       }
     end
 
-    def redis_service_payload(replica)
+    def redis_service_payload
       {
         apiVersion: "v1",
         kind: "Service",
         metadata: {
-          name: "#{name}-redis-#{replica}",
+          name: "#{name}-redis",
+          ownerReferences: owner_references,
         },
         spec: {
           clusterIP: "None",
@@ -177,98 +170,46 @@ module ActiveDeployment
             name: "redis",
           }],
           selector: {
-            "statefulset.kubernetes.io/pod-name" => "#{name}-redis-#{replica}",
+            "app.kubernetes.io/component" => "redis",
+            "app.kubernetes.io/part-of" => name,
           },
         },
       }
     end
 
-    def sentinel_payload
-      known_replicas = (1..(replicas - 1)).map do |replica|
-        %{echo "sentinel known-replica #{name} $(dig +short mynewsdesk-test-redis-#{replica}.default.svc.cluster.local) 6379" >> /etc/redis/sentinel.conf} # rubocop:disable Layout/LineLength
-      end
-
+    def redis_master_service_payload
       {
+        apiVersion: "v1",
+        kind: "Service",
         metadata: {
-          name: "#{name}-redis-sentinel",
-          labels: {
-            "app.kubernetes.io/component" => "sentinel",
-            "app.kubernetes.io/managed-by" => "activedeployment",
-            "app.kubernetes.io/name" => "sentinel",
-            "app.kubernetes.io/part-of" => name,
-          },
-          ownerReferences: [{
-            apiVersion: "ruby.love/v1",
-            blockOwnerDeletion: true,
-            controller: true,
-            kind: "Redis",
-            name: name,
-            uid: uid,
-          }],
+          name: "#{name}-redis-master",
+          ownerReferences: owner_references,
         },
         spec: {
-          replicas: 3,
+          clusterIP: "None",
+          ports: [{
+            port: 6379,
+            targetPort: 6379,
+            name: "redis",
+          }],
           selector: {
-            matchLabels: {
-              "app.kubernetes.io/component" => "sentinel",
-              "app.kubernetes.io/part-of" => name,
-            },
-          },
-          template: {
-            metadata: {
-              labels: {
-                "app.kubernetes.io/component" => "sentinel",
-                "app.kubernetes.io/managed-by" => "activedeployment",
-                "app.kubernetes.io/name" => "sentinel",
-                "app.kubernetes.io/part-of" => name,
-              },
-            },
-            spec: {
-              volumes: [
-                { name: "conf", emptyDir: {} },
-              ],
-              initContainers: [{
-                name: "config-generator",
-                image: "ghcr.io/mynewsdesk/utils:1665679034", # need dig
-                command: %w[sh -c],
-                args: [
-                  <<~SH
-                    echo "sentinel monitor #{name} $(dig +short mynewsdesk-test-redis-0.default.svc.cluster.local) 6379 2" >> /etc/redis/sentinel.conf
-
-                    #{known_replicas.join("\n")}
-                  SH
-                ],
-                volumeMounts: [{ name: "conf", mountPath: "/etc/redis" }],
-              }],
-              containers: [
-                {
-                  name: "redis",
-                  image: "redis:7.0.7-alpine",
-                  command: %w[redis-server /etc/redis/sentinel.conf --sentinel],
-                  ports: [{ containerPort: 26379, name: "sentinel", protocol: "TCP" }],
-                  livenessProbe: {
-                    exec: {
-                      command: %w[redis-cli -p 26379 ping],
-                    },
-                  },
-                  resources: {
-                    limits: {
-                      memory: "64Mi",
-                    },
-                    requests: {
-                      cpu: "100m",
-                      memory: "64Mi",
-                    },
-                  },
-                  volumeMounts: [
-                    { name: "conf", mountPath: "/etc/redis" },
-                  ],
-                },
-              ],
-            },
+            "app.kubernetes.io/component" => "redis",
+            "app.kubernetes.io/part-of" => name,
+            "redis.ruby.love/role" => "master",
           },
         },
       }
+    end
+
+    def owner_references
+      [{
+        apiVersion: "ruby.love/v1",
+        blockOwnerDeletion: true,
+        controller: true,
+        kind: "Redis",
+        name: name,
+        uid: uid,
+      }]
     end
   end
 end
